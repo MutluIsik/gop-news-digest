@@ -27,6 +27,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # `classified-digest.json` is pushed straight to this repo's root by a different, separate job
+      # (Game of People's own news-digest publisher — see that project's ADR-209), on its own
+      # schedule. It is not part of this repo's own build (`scripts/build-digest.mjs` never produces
+      # it), so it has to be carried into `dist/` by hand here, or Pages never serves it — `dist/` is
+      # the only thing `upload-pages-artifact` below ever sees. Conditional because the very first
+      # deploy after that other job is wired up, or any deploy that happens to race ahead of its
+      # first successful push, should still publish `digest.json` correctly with nothing missing.
+      - name: Carry the classified digest into dist/, if the other job has published one
+        run: |
+          if [ -f classified-digest.json ]; then
+            cp classified-digest.json dist/classified-digest.json
+          fi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
