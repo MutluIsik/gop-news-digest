@@ -11,6 +11,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "he": "^1.2.0",
     "rss-parser": "^3.13.0"
   }
 }

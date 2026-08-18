@@ -9,6 +9,13 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import Parser from 'rss-parser';
+// A hand-rolled entity table covering a dozen common names (`&rsquo;`, `&mdash;`, …) missed real ones
+// in practice — `&ccedil;` ("ç") showed up undecoded in a live run, which is more than a display bug:
+// an entity a publisher's meta tag decodes but its article body doesn't (or the reverse) makes two
+// otherwise-identical sentences compare as different text, which is exactly what the duplicate-excerpt
+// check below depends on comparing correctly. `he` covers the full HTML5 named/numeric entity set.
+import he from 'he';
+const decodeEntities = he.decode;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -79,13 +86,29 @@ function stripTags(html) {
  * `ArticleExtractor.ts` in the main game repo (which cannot be imported across repositories, so this is
  * a deliberate re-implementation, not a copy) — same two sources, same "combine rather than choose"
  * call, same "never throws, `null` costs nothing" contract.
+ *
+ * **Drops a paragraph that repeats one already kept.** A live example: one publisher's markup has the
+ * standfirst as two separate, byte-identical `<p>` tags (one likely for a layout this parser cannot
+ * tell apart from the real one) — nothing to do with this script's own logic, a fact about that page's
+ * markup, and every `<p>` in the landmark is fair game to have it. `seen` is normalized text, not raw
+ * text, so the near-identical (not byte-identical) case still catches — the same comparison
+ * `articleExcerpt` below uses against the description, applied one level in.
  */
 function extractLeadParagraphs(html) {
   const landmark = matchTag(html, 'article') ?? matchTag(html, 'main') ?? html;
-  const paragraphs = [...landmark.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
-    .slice(0, MAX_PARAGRAPHS)
-    .map((match) => decodeEntities(stripTags(match[1] ?? '')).trim().replace(/\s+/g, ' '))
-    .filter((text) => text.length > 0);
+  const seen = new Set();
+  const paragraphs = [];
+  for (const match of landmark.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)) {
+    if (paragraphs.length >= MAX_PARAGRAPHS) break;
+    const text = decodeEntities(stripTags(match[1] ?? ''))
+      .trim()
+      .replace(/\s+/g, ' ');
+    if (text.length === 0) continue;
+    const key = normalizeForComparison(text);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paragraphs.push(text);
+  }
   if (paragraphs.length === 0) return null;
   return paragraphs.join(' ');
 }
@@ -99,9 +122,32 @@ function extractMetaDescription(html) {
 }
 
 /**
- * Best-effort excerpt off the article's own page: the meta description plus real lead-paragraph text,
- * combined — strictly more material than either alone, and more than an RSS teaser ever carries. Never
- * throws; `null` means the caller falls back to the RSS teaser, exactly as a failed fetch already does.
+ * Down to bare words, dropping every punctuation mark rather than trying to normalize quote styles.
+ * A publisher's og:description and its own article body restate the same phrase in different
+ * typography surprisingly often — straight `'Mommy's Home,'` in one, curly `“Mommy's Home,”` in the
+ * other, same six words either way — so comparing punctuation at all just invites a false negative for
+ * no benefit: two strings that agree on their sequence of words are a duplicate for this purpose
+ * regardless of which quote character either one happened to use.
+ */
+function normalizeForComparison(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Best-effort excerpt off the article's own page: real lead-paragraph text, plus the meta description
+ * **only when it says something the paragraphs do not already say**.
+ *
+ * A publisher's `og:description` is very often lifted verbatim from the article's own opening
+ * sentence — the E! News sample that motivated this check restates it twice, word for word bar one
+ * stray space. Concatenating both unconditionally (an earlier version of this script did, mirroring
+ * `ArticleExtractor.ts`'s own "duplication costs nothing" call in the main game repo) spends a real
+ * fraction of `TEASER_MAX_CHARS` repeating a fact rather than adding one — worse here than in that
+ * design, which only ever restates in *one* sentence; some publishers restate across several. So this
+ * diverges from that upstream design on purpose: if the normalized description text already appears
+ * inside the normalized lead-paragraph text, the description is dropped and the paragraphs stand
+ * alone, since they were always the longer, more complete supersede of the two.
+ *
+ * Never throws; `null` means the caller falls back to the RSS teaser, exactly as a failed fetch does.
  */
 async function articleExcerpt(link) {
   if (!link) return null;
@@ -110,33 +156,15 @@ async function articleExcerpt(link) {
   const html = stripNoiseElements(fetched.body);
   const description = extractMetaDescription(html);
   const leadParagraphs = extractLeadParagraphs(html);
-  const parts = [description, leadParagraphs].filter((part) => part && part.length > 0);
+  const descriptionIsRedundant =
+    description !== null &&
+    leadParagraphs !== null &&
+    normalizeForComparison(leadParagraphs).includes(normalizeForComparison(description));
+  const parts = [descriptionIsRedundant ? null : description, leadParagraphs].filter(
+    (part) => part && part.length > 0,
+  );
   if (parts.length === 0) return null;
   return truncate(parts.join(' '), TEASER_MAX_CHARS);
-}
-
-const NAMED_ENTITIES = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-  rsquo: '’',
-  lsquo: '‘',
-  rdquo: '”',
-  ldquo: '“',
-  mdash: '—',
-  ndash: '–',
-  hellip: '…',
-};
-
-/** Decodes numeric (`&#39;`, `&#x27;`) and the common named entities RSS/HTML text carries. */
-function decodeEntities(text) {
-  return text
-    .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_m, dec) => String.fromCodePoint(parseInt(dec, 10)))
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|rsquo|lsquo|rdquo|ldquo|mdash|ndash|hellip);/g, (_m, name) => NAMED_ENTITIES[name]);
 }
 
 async function collectFeed(feed) {
