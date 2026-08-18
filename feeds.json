@@ -1,0 +1,14 @@
+[
+  { "url": "https://eol-feeds.eonline.com/rssfeed/us/top_stories", "source": "E! Online" },
+  { "url": "https://www.rollingstone.com/feed/", "source": "Rolling Stone" },
+  { "url": "https://variety.com/feed/", "source": "Variety" },
+  { "url": "https://www.theguardian.com/culture/rss", "source": "The Guardian (Culture)" },
+  { "url": "https://www.goodnewsnetwork.org/feed/", "source": "Good News Network" },
+  { "url": "https://www.positive.news/feed/", "source": "Positive News" },
+  { "url": "https://www.theguardian.com/lifeandstyle/rss", "source": "The Guardian (Life and Style)" },
+  { "url": "https://www.eater.com/rss/index.xml", "source": "Eater" },
+  { "url": "https://www.theguardian.com/uk/money/rss", "source": "The Guardian (Money)" },
+  { "url": "https://feeds.npr.org/1017/rss.xml", "source": "NPR (Your Money)" },
+  { "url": "https://techcrunch.com/feed/", "source": "TechCrunch" },
+  { "url": "https://www.theverge.com/rss/index.xml", "source": "The Verge" }
+]

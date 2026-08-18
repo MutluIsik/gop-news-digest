@@ -1,0 +1,16 @@
+{
+  "name": "gop-news-digest",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Scheduled job that fetches RSS feeds server-side and publishes a small CORS-friendly JSON digest to GitHub Pages, for Game of People's news-backed missions.",
+  "scripts": {
+    "build": "node scripts/build-digest.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "rss-parser": "^3.13.0"
+  }
+}
