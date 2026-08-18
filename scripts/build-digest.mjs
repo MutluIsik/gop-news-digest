@@ -17,7 +17,8 @@ const DIST_DIR = resolve(ROOT, 'dist');
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_ENTRIES_PER_FEED = 8;
 const MAX_TOTAL_ITEMS = 100;
-const TEASER_MAX_CHARS = 500;
+const TEASER_MAX_CHARS = 700;
+const MAX_PARAGRAPHS = 12;
 const USER_AGENT = 'gop-news-digest/1 (+https://github.com/MutluIsik/gop-news-digest)';
 
 const parser = new Parser({
@@ -51,17 +52,67 @@ function truncate(text, maxChars) {
   return `${lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut}…`;
 }
 
-/** Best-effort: og:description or the first real paragraph, off the article's own page. Never throws. */
+/** Cut anything that is never article prose, before hunting through it for paragraphs. */
+function stripNoiseElements(html) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+}
+
+function matchTag(html, tag) {
+  const match = html.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i'));
+  return match?.[1] ?? null;
+}
+
+function stripTags(html) {
+  return html.replace(/<[^>]+>/g, ' ');
+}
+
+/**
+ * A meta-description tag is a one-sentence blurb a publisher writes *for social-media cards* — it is
+ * frequently the exact same short text as the RSS feed's own `<description>`, so stopping here (as an
+ * earlier version of this script did) fetches the whole article page and gets nothing the feed did not
+ * already give away for free. The lead `<p>` tags inside `<article>`/`<main>` are what's actually worth
+ * the fetch: real sentences from the article body a bare RSS teaser never carries. Mirrors
+ * `ArticleExtractor.ts` in the main game repo (which cannot be imported across repositories, so this is
+ * a deliberate re-implementation, not a copy) — same two sources, same "combine rather than choose"
+ * call, same "never throws, `null` costs nothing" contract.
+ */
+function extractLeadParagraphs(html) {
+  const landmark = matchTag(html, 'article') ?? matchTag(html, 'main') ?? html;
+  const paragraphs = [...landmark.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .slice(0, MAX_PARAGRAPHS)
+    .map((match) => decodeEntities(stripTags(match[1] ?? '')).trim().replace(/\s+/g, ' '))
+    .filter((text) => text.length > 0);
+  if (paragraphs.length === 0) return null;
+  return paragraphs.join(' ');
+}
+
+function extractMetaDescription(html) {
+  const og = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i);
+  if (og?.[1]) return decodeEntities(og[1]).trim();
+  const metaDesc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i);
+  if (metaDesc?.[1]) return decodeEntities(metaDesc[1]).trim();
+  return null;
+}
+
+/**
+ * Best-effort excerpt off the article's own page: the meta description plus real lead-paragraph text,
+ * combined — strictly more material than either alone, and more than an RSS teaser ever carries. Never
+ * throws; `null` means the caller falls back to the RSS teaser, exactly as a failed fetch already does.
+ */
 async function articleExcerpt(link) {
   if (!link) return null;
   const fetched = await fetchText(link, FETCH_TIMEOUT_MS);
   if (!fetched.ok) return null;
-  const html = fetched.body;
-  const og = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
-  if (og?.[1]) return decodeEntities(truncate(og[1], TEASER_MAX_CHARS));
-  const metaDesc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
-  if (metaDesc?.[1]) return decodeEntities(truncate(metaDesc[1], TEASER_MAX_CHARS));
-  return null;
+  const html = stripNoiseElements(fetched.body);
+  const description = extractMetaDescription(html);
+  const leadParagraphs = extractLeadParagraphs(html);
+  const parts = [description, leadParagraphs].filter((part) => part && part.length > 0);
+  if (parts.length === 0) return null;
+  return truncate(parts.join(' '), TEASER_MAX_CHARS);
 }
 
 const NAMED_ENTITIES = {
